@@ -1,0 +1,7 @@
+{
+  "name": "Petualangan Sahabat Cilik",
+  "description": "Obrolan suara ajaib bersama Luna, Cica, Sharky, dan Titi. Didesain khusus untuk menemani petualangan anak-anak.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
