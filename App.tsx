@@ -128,13 +128,13 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isContentVisible, setIsContentVisible] = useState(false);
-  const [userTranscription, setUserTranscription] = useState('');
   const [userVolume, setUserVolume] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   const sessionRef = useRef<any>(null);
   const audioContextInRef = useRef<AudioContext | null>(null);
   const audioContextOutRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const nextStartTimeRef = useRef(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const isMutedRef = useRef(false);
@@ -168,12 +168,19 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
 
   const stopConversation = useCallback(() => {
     isConnectingRef.current = false;
+    
     if (sessionRef.current) {
       try { sessionRef.current.close(); } catch(e) {}
       sessionRef.current = null;
     }
+    
     activeSourcesRef.current.forEach(source => { try { source.stop(); } catch(e) {} });
     activeSourcesRef.current.clear();
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
     
     if (audioContextInRef.current) {
       try { audioContextInRef.current.close(); } catch(e) {}
@@ -183,6 +190,7 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
       try { audioContextOutRef.current.close(); } catch(e) {}
       audioContextOutRef.current = null;
     }
+    
     setStatus(AppStatus.IDLE);
     setIsAiSpeaking(false);
   }, []);
@@ -213,18 +221,21 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
     isConnectingRef.current = true;
     setErrorMessage(null);
 
+    // Bersihkan sesi lama jika ada
+    if (sessionRef.current) stopConversation();
+
     try {
       setStatus(AppStatus.CONNECTING);
       
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
       
-      if (audioContextInRef.current) try { await audioContextInRef.current.close(); } catch(e) {}
-      if (audioContextOutRef.current) try { await audioContextOutRef.current.close(); } catch(e) {}
-
+      // Setup Audio Contexts
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextOutRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
+      // Request Mikrofon
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       
       if (audioContextInRef.current.state === 'suspended') await audioContextInRef.current.resume();
       if (audioContextOutRef.current.state === 'suspended') await audioContextOutRef.current.resume();
@@ -242,23 +253,24 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
             isConnectingRef.current = false;
             setStatus(AppStatus.CONNECTED);
             
-            // PROMPT OPTIMASI: Dikirimkan sebagai instruksi sistem yang kuat pada pesan pertama.
-            sessionPromise.then(session => {
-              session.sendRealtimeInput({
-                text: `
-                OVERRIDE SYSTEM PERSONA:
-                - Kamu adalah ${character.fullName}. 
-                - Teman bicaramu adalah ${profile.name}, anak berusia 5 tahun.
-                - ATURAN BICARA:
-                  1. Gunakan Bahasa Indonesia yang SANGAT sederhana (level TK).
-                  2. Kalimat harus PENDEK (maksimal 2-3 kalimat saja sekali bicara).
-                  3. Nada bicara harus ceria, ekspresif, dan penuh keajaiban.
-                  4. Selalu akhiri setiap ucapanmu dengan pertanyaan yang sangat mudah dijawab.
-                  5. Jangan pernah menyebut kamu adalah AI atau komputer.
-                  6. Fokus pada topik: ${character.prompt}
-                - TUGAS PERTAMA: Sapa ${profile.name} sekarang dengan penuh semangat!`
-              });
-            });
+            // Jeda singkat sebelum mengirim teks pertama untuk stabilitas
+            setTimeout(() => {
+              sessionPromise.then(session => {
+                session.sendRealtimeInput({
+                  text: `
+                  OVERRIDE SYSTEM PERSONA:
+                  - Kamu adalah ${character.fullName}. 
+                  - Teman bicaramu adalah ${profile.name}, anak berusia 5 tahun.
+                  - ATURAN BICARA:
+                    1. Gunakan Bahasa Indonesia yang SANGAT sederhana (level TK).
+                    2. Kalimat harus PENDEK (maksimal 2-3 kalimat saja sekali bicara).
+                    3. Nada bicara harus ceria, ekspresif, dan penuh keajaiban.
+                    4. Selalu akhiri setiap ucapanmu dengan pertanyaan yang sangat mudah dijawab.
+                    5. Fokus pada topik: ${character.prompt}
+                  - TUGAS PERTAMA: Sapa ${profile.name} sekarang dengan penuh semangat!`
+                });
+              }).catch(err => console.error("Initial send failed:", err));
+            }, 100);
 
             if (!audioContextInRef.current) return;
             
@@ -324,13 +336,19 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
               setIsAiSpeaking(false);
             }
           },
-          onerror: (e) => { 
-            console.error('Session Error:', e); 
+          onerror: (e: any) => { 
+            console.error('Session Error Callback:', e); 
             isConnectingRef.current = false;
-            setErrorMessage('Waduh, koneksi kita terputus! Coba tekan tombol ulangi ya.');
+            
+            if (e?.message?.includes('Network error')) {
+              setErrorMessage('Sinyal ajaibnya sedang lemah. Pastikan internetmu aktif dan coba lagi ya!');
+            } else {
+              setErrorMessage('Waduh, koneksi kita terputus! Tekan tombol ulangi di bawah ya.');
+            }
             setStatus(AppStatus.ERROR); 
           },
-          onclose: () => { 
+          onclose: (e) => { 
+            console.log('Session Closed:', e);
             isConnectingRef.current = false;
             if (statusRef.current !== AppStatus.PAUSED && statusRef.current !== AppStatus.ERROR) {
               setStatus(AppStatus.IDLE); 
@@ -340,9 +358,14 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
       });
       sessionRef.current = await sessionPromise;
     } catch (err: any) { 
-      console.error('Setup failed:', err); 
+      console.error('Connection process failed:', err); 
       isConnectingRef.current = false;
-      setErrorMessage('Gagal memanggil temanmu. Pastikan internetmu aktif ya!');
+      
+      if (err?.message?.includes('Network error')) {
+        setErrorMessage('Ups! Sepertinya ada masalah koneksi. Coba cek internetmu ya!');
+      } else {
+        setErrorMessage('Gagal memanggil temanmu. Ayo coba tekan tombol ulangi!');
+      }
       setStatus(AppStatus.ERROR); 
     }
   };
