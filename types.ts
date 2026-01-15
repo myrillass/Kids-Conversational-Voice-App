@@ -9,6 +9,7 @@ export enum AppStatus {
   IDLE = 'IDLE',
   CONNECTING = 'CONNECTING',
   CONNECTED = 'CONNECTED',
+  PAUSED = 'PAUSED',
   ERROR = 'ERROR'
 }
 
