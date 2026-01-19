@@ -56,12 +56,40 @@ const CHARACTERS = [
   }
 ];
 
+// Helper to check for external API key dialog
+const checkApiKey = async () => {
+  if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
+    return await (window as any).aistudio.hasSelectedApiKey();
+  }
+  return !!process.env.API_KEY;
+};
+
+const openKeyPicker = async () => {
+  if (typeof (window as any).aistudio?.openSelectKey === 'function') {
+    await (window as any).aistudio.openSelectKey();
+    return true;
+  }
+  return false;
+};
+
 const SetupScreen = ({ onStart }: { onStart: (profile: UserProfile) => void }) => {
   const [name, setName] = useState('');
   const [selectedChar, setSelectedChar] = useState<CharacterType>('Luna');
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
 
-  const handleStart = () => {
+  useEffect(() => {
+    checkApiKey().then(setHasKey);
+  }, []);
+
+  const handleStart = async () => {
     playPopSound();
+    if (!hasKey) {
+      const opened = await openKeyPicker();
+      if (!opened && !process.env.API_KEY) {
+        alert("Maaf, aplikasi butuh 'Kunci Ajaib' untuk mulai bicara. Silakan hubungkan kuncinya ya!");
+        return;
+      }
+    }
     onStart({ name, character: selectedChar, age: 5 });
   };
 
@@ -118,6 +146,12 @@ const SetupScreen = ({ onStart }: { onStart: (profile: UserProfile) => void }) =
         >
           Mulai! 🚀
         </button>
+
+        {!hasKey && hasKey !== null && (
+          <p className="mt-6 text-xs text-blue-400 font-bold uppercase tracking-widest animate-pulse">
+            * Memerlukan Kunci Ajaib untuk bicara
+          </p>
+        )}
       </div>
     </div>
   );
@@ -157,83 +191,41 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
     } else if (status === AppStatus.ERROR || status === AppStatus.IDLE) {
       if (status === AppStatus.ERROR) playErrorOopsSound();
       setIsContentVisible(false);
-    } else if (status === AppStatus.PAUSED) {
-      playToggleSound(false);
-      setUserVolume(0);
-      activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
-      activeSourcesRef.current.clear();
-      setIsAiSpeaking(false);
     }
   }, [status]);
 
   const stopConversation = useCallback(() => {
     isConnectingRef.current = false;
-    
     if (sessionRef.current) {
       try { sessionRef.current.close(); } catch(e) {}
       sessionRef.current = null;
     }
-    
     activeSourcesRef.current.forEach(source => { try { source.stop(); } catch(e) {} });
     activeSourcesRef.current.clear();
-    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
-    
-    if (audioContextInRef.current) {
-      try { audioContextInRef.current.close(); } catch(e) {}
-      audioContextInRef.current = null;
-    }
-    if (audioContextOutRef.current) {
-      try { audioContextOutRef.current.close(); } catch(e) {}
-      audioContextOutRef.current = null;
-    }
-    
+    if (audioContextInRef.current) { try { audioContextInRef.current.close(); } catch(e) {} audioContextInRef.current = null; }
+    if (audioContextOutRef.current) { try { audioContextOutRef.current.close(); } catch(e) {} audioContextOutRef.current = null; }
     setStatus(AppStatus.IDLE);
     setIsAiSpeaking(false);
   }, []);
-
-  const handleToggleMute = () => {
-    if (status === AppStatus.PAUSED) return;
-    playToggleSound(!isMuted);
-    setIsMuted(!isMuted);
-  };
-
-  const handleTogglePause = () => {
-    if (status === AppStatus.CONNECTED) {
-      setStatus(AppStatus.PAUSED);
-    } else if (status === AppStatus.PAUSED) {
-      playToggleSound(true);
-      setStatus(AppStatus.CONNECTED);
-    }
-  };
-
-  const handleBack = () => {
-    playPopSound();
-    stopConversation();
-    onBack();
-  };
 
   const startConversation = async () => {
     if (isConnectingRef.current) return;
     isConnectingRef.current = true;
     setErrorMessage(null);
 
-    // Bersihkan sesi lama jika ada
-    if (sessionRef.current) stopConversation();
-
     try {
       setStatus(AppStatus.CONNECTING);
       
+      // Inisialisasi API dengan kunci terbaru
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
       
-      // Setup Audio Contexts
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextOutRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
-      // Request Mikrofon
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       
@@ -253,65 +245,39 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
             isConnectingRef.current = false;
             setStatus(AppStatus.CONNECTED);
             
-            // Jeda singkat sebelum mengirim teks pertama untuk stabilitas
             setTimeout(() => {
               sessionPromise.then(session => {
                 session.sendRealtimeInput({
-                  text: `
-                  OVERRIDE SYSTEM PERSONA:
-                  - Kamu adalah ${character.fullName}. 
-                  - Teman bicaramu adalah ${profile.name}, anak berusia 5 tahun.
-                  - ATURAN BICARA:
-                    1. Gunakan Bahasa Indonesia yang SANGAT sederhana (level TK).
-                    2. Kalimat harus PENDEK (maksimal 2-3 kalimat saja sekali bicara).
-                    3. Nada bicara harus ceria, ekspresif, dan penuh keajaiban.
-                    4. Selalu akhiri setiap ucapanmu dengan pertanyaan yang sangat mudah dijawab.
-                    5. Fokus pada topik: ${character.prompt}
-                  - TUGAS PERTAMA: Sapa ${profile.name} sekarang dengan penuh semangat!`
+                  text: `OVERRIDE SYSTEM PERSONA: Halo, namaku ${character.fullName}. Temanku ${profile.name} (5th) sudah datang! SAPA DIA SEKARANG dengan 2 kalimat ceria dan ajak dia bicara tentang ${character.prompt}. Ingat: Gunakan bahasa anak-anak yang sangat sederhana.`
                 });
-              }).catch(err => console.error("Initial send failed:", err));
-            }, 100);
+              }).catch(() => {});
+            }, 150);
 
-            if (!audioContextInRef.current) return;
-            
-            const source = audioContextInRef.current.createMediaStreamSource(stream);
-            const scriptProcessor = audioContextInRef.current.createScriptProcessor(4096, 1, 1);
+            const source = audioContextInRef.current!.createMediaStreamSource(stream);
+            const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
             
             scriptProcessor.onaudioprocess = (e) => {
-              if (isMutedRef.current || statusRef.current === AppStatus.PAUSED || statusRef.current !== AppStatus.CONNECTED) { 
-                setUserVolume(0); 
-                return; 
-              }
-              
+              if (isMutedRef.current || statusRef.current !== AppStatus.CONNECTED) { setUserVolume(0); return; }
               const inputData = e.inputBuffer.getChannelData(0);
               let sum = 0;
-              for (let i = 0; i < inputData.length; i++) { sum += inputData[i] * inputData[i]; }
-              const volume = Math.sqrt(sum / inputData.length);
-              setUserVolume(Math.min(volume * 10, 1));
+              for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
+              setUserVolume(Math.min(Math.sqrt(sum / inputData.length) * 10, 1));
               
               const pcmBlob = createPcmBlob(inputData);
               sessionPromise.then(session => { 
-                if (statusRef.current === AppStatus.CONNECTED) {
-                  session.sendRealtimeInput({ media: pcmBlob }); 
-                }
+                if (statusRef.current === AppStatus.CONNECTED) session.sendRealtimeInput({ media: pcmBlob }); 
               }).catch(() => {});
             };
             
             source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContextInRef.current.destination);
+            scriptProcessor.connect(audioContextInRef.current!.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            if (statusRef.current === AppStatus.PAUSED) return;
-            
             const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (base64Audio && audioContextOutRef.current) {
               setIsAiSpeaking(true);
               const ctx = audioContextOutRef.current;
-              
-              if (ctx.state === 'suspended') await ctx.resume();
-              
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-              
               try {
                 const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
                 const source = ctx.createBufferSource();
@@ -324,11 +290,8 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
                 activeSourcesRef.current.add(source);
                 source.start(nextStartTimeRef.current);
                 nextStartTimeRef.current += audioBuffer.duration;
-              } catch (err) {
-                console.error('Audio decoding failed:', err);
-              }
+              } catch (err) {}
             }
-            
             if (message.serverContent?.interrupted) {
               activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
               activeSourcesRef.current.clear();
@@ -337,35 +300,28 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
             }
           },
           onerror: (e: any) => { 
-            console.error('Session Error Callback:', e); 
             isConnectingRef.current = false;
-            
-            if (e?.message?.includes('Network error')) {
-              setErrorMessage('Sinyal ajaibnya sedang lemah. Pastikan internetmu aktif dan coba lagi ya!');
+            const msg = e?.message || "";
+            if (msg.includes('Requested entity was not found')) {
+              setErrorMessage('Kunci ajaibnya perlu diperbarui. Ayo klik tombol di bawah!');
+              openKeyPicker();
+            } else if (msg.includes('Network error')) {
+              setErrorMessage('Sinyal kita sedang lemah. Cek internetmu ya!');
             } else {
-              setErrorMessage('Waduh, koneksi kita terputus! Tekan tombol ulangi di bawah ya.');
+              setErrorMessage('Waduh, koneksi terputus! Coba tekan tombol ulangi.');
             }
             setStatus(AppStatus.ERROR); 
           },
-          onclose: (e) => { 
-            console.log('Session Closed:', e);
+          onclose: () => { 
             isConnectingRef.current = false;
-            if (statusRef.current !== AppStatus.PAUSED && statusRef.current !== AppStatus.ERROR) {
-              setStatus(AppStatus.IDLE); 
-            }
+            if (statusRef.current !== AppStatus.ERROR) setStatus(AppStatus.IDLE); 
           }
         }
       });
       sessionRef.current = await sessionPromise;
     } catch (err: any) { 
-      console.error('Connection process failed:', err); 
       isConnectingRef.current = false;
-      
-      if (err?.message?.includes('Network error')) {
-        setErrorMessage('Ups! Sepertinya ada masalah koneksi. Coba cek internetmu ya!');
-      } else {
-        setErrorMessage('Gagal memanggil temanmu. Ayo coba tekan tombol ulangi!');
-      }
+      setErrorMessage('Gagal memanggil temanmu. Ayo coba tekan tombol ulangi!');
       setStatus(AppStatus.ERROR); 
     }
   };
@@ -375,174 +331,62 @@ const ChatScreen = ({ profile, onBack }: { profile: UserProfile, onBack: () => v
     return () => stopConversation();
   }, []);
 
-  const isWorkingState = status === AppStatus.CONNECTED || status === AppStatus.PAUSED;
+  const handleBack = () => { playPopSound(); stopConversation(); onBack(); };
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col items-center justify-between overflow-hidden">
-      
-      {/* Header */}
-      <div className={`w-full p-4 md:p-6 ${character.color} text-white flex items-center justify-between shadow-md z-30 transition-colors duration-700`}>
-        <button onClick={handleBack} className="p-2 hover:bg-white/20 rounded-full active:scale-90" aria-label="Kembali">
-          <svg className="w-6 h-6 md:w-10 md:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" /></svg>
-        </button>
-        <div className="flex flex-col items-center">
-          <span className="font-bold text-lg md:text-3xl leading-none">{character.name}</span>
-          <span className="text-[10px] md:text-xs opacity-90 font-bold uppercase tracking-widest mt-0.5">Teman {profile.name}</span>
-        </div>
-        <button 
-          onClick={handleBack}
-          className="px-3 py-1.5 md:px-5 md:py-2 bg-white/20 hover:bg-white/30 rounded-full text-xs md:text-base font-bold border border-white/40 active:scale-95 transition-all flex items-center gap-1 shadow-sm"
-        >
-          <span>Berhenti</span>
-          <span className="hidden md:inline">👋</span>
-        </button>
+      <div className={`w-full p-4 ${character.color} text-white flex items-center justify-between shadow-md z-30`}>
+        <button onClick={handleBack} className="p-2 hover:bg-white/20 rounded-full"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" /></svg></button>
+        <span className="font-bold text-xl">{character.name}</span>
+        <button onClick={handleBack} className="px-4 py-2 bg-white/20 rounded-full font-bold">Berhenti 👋</button>
       </div>
 
-      {/* Main Experience Area */}
-      <div className="flex-1 w-full flex flex-col items-center justify-center p-4 relative overflow-hidden">
-        
-        {/* Character Avatar */}
-        <div className={`relative transition-all duration-700 transform ${isAiSpeaking ? 'scale-105 md:scale-110' : 'scale-100'} ${isContentVisible ? 'opacity-100' : 'opacity-0 translate-y-6'}`}>
-          {isAiSpeaking && status === AppStatus.CONNECTED && (
-            <div className="absolute inset-0 bg-blue-400/20 rounded-full animate-ping scale-[1.8] opacity-20"></div>
-          )}
-
-          {!isMuted && userVolume > 0.05 && status === AppStatus.CONNECTED && (
-            <div 
-              className="absolute inset-0 rounded-full blur-3xl transition-all duration-150 opacity-40"
-              style={{ 
-                transform: `scale(${1 + userVolume * 1.5})`,
-                backgroundColor: userVolume > 0.6 ? '#facc15' : '#f87171' 
-              }}
-            ></div>
-          )}
-          
-          <div className={`text-[8rem] md:text-[14rem] select-none transition-all duration-500 transform ${isAiSpeaking && status === AppStatus.CONNECTED ? 'glow-active' : 'float-animation'}`}>
-            {character.emoji}
-          </div>
+      <div className="flex-1 flex flex-col items-center justify-center relative">
+        <div className={`text-[12rem] transition-all duration-700 transform ${isAiSpeaking ? 'scale-110 glow-active' : 'float-animation'} ${isContentVisible ? 'opacity-100' : 'opacity-0'}`}>
+          {character.emoji}
         </div>
-
-        {/* Status Area */}
-        <div className="mt-8 text-center z-10 px-4 min-h-[4rem] flex flex-col justify-center">
+        
+        <div className="mt-8 text-center px-6 min-h-[4rem]">
           {status === AppStatus.CONNECTING ? (
-            <div className="flex flex-col items-center gap-2">
-              <div className="w-8 h-8 md:w-12 md:h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-blue-500 font-bold text-sm md:text-xl animate-pulse">Menghubungkan Keajaiban...</p>
-            </div>
+            <div className="animate-pulse text-blue-500 font-bold">Menghubungkan Keajaiban...</div>
           ) : status === AppStatus.ERROR ? (
-            <div className="flex flex-col items-center gap-4 animate-fade-in-up">
-              <p className="text-red-500 font-bold text-base md:text-xl max-w-xs">{errorMessage}</p>
-              <button 
-                onClick={() => startConversation()}
-                className="bg-blue-500 hover:bg-blue-600 text-white px-8 py-3 rounded-full font-bold shadow-lg transition-transform active:scale-95"
-              >
-                Ulangi 🔄
-              </button>
-            </div>
-          ) : status === AppStatus.PAUSED ? (
-            <div className="animate-fade-in-up">
-              <h2 className="text-xl md:text-3xl font-bold text-slate-500">Istirahat Sejenak 💤</h2>
+            <div className="space-y-4">
+              <p className="text-red-500 font-bold">{errorMessage}</p>
+              <button onClick={() => startConversation()} className="bg-blue-500 text-white px-8 py-3 rounded-full font-bold shadow-lg">Ulangi 🔄</button>
             </div>
           ) : (
-            <div className={`space-y-1 transition-all duration-500 ${isContentVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-              <h2 className={`text-xl md:text-3xl font-bold ${isAiSpeaking ? 'text-blue-600' : 'text-slate-400'}`}>
-                {isAiSpeaking ? `${character.name} sedang bicara...` : isMuted ? 'Mikrofon Mati' : 'Silakan bicara!'}
-              </h2>
-            </div>
+            <h2 className={`text-2xl font-bold ${isAiSpeaking ? 'text-blue-600' : 'text-slate-400'}`}>
+              {isAiSpeaking ? `${character.name} bicara...` : isMuted ? 'Mikrofon Mati' : 'Silakan bicara!'}
+            </h2>
           )}
         </div>
       </div>
 
-      {/* Control Footer */}
-      <div className={`w-full p-6 md:p-10 bg-white shadow-[0_-10px_30px_rgba(0,0,0,0.05)] rounded-t-[2.5rem] md:rounded-t-[3.5rem] z-30 transition-all duration-700 ${isWorkingState ? 'translate-y-0' : 'translate-y-full'}`}>
-        <div className="max-w-md mx-auto flex flex-col items-center gap-6">
-          
-          {/* Visualizer */}
-          <div className="flex items-end justify-center gap-1.5 h-10 w-full">
-            {!isMuted && status === AppStatus.CONNECTED && [...Array(7)].map((_, i) => {
-              const distanceFromCenter = Math.abs(i - 3);
-              const heightVal = Math.max(15, userVolume * (100 - distanceFromCenter * 20) * 1.5);
-              return (
-                <div 
-                  key={i}
-                  className="w-2.5 md:w-3 rounded-full transition-all duration-100"
-                  style={{ 
-                    height: `${heightVal}%`,
-                    backgroundColor: userVolume > 0.6 ? '#facc15' : userVolume > 0.3 ? '#fb923c' : '#f87171',
-                    opacity: 0.5 + userVolume * 0.5
-                  }}
-                ></div>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center justify-center gap-6 md:gap-12 w-full">
-            <button
-              onClick={handleTogglePause}
-              className={`w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all shadow-md active:scale-90 border-2 border-white ${
-                status === AppStatus.PAUSED ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'
-              }`}
-            >
-              {status === AppStatus.PAUSED ? (
-                <svg className="w-6 h-6 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-              ) : (
-                <svg className="w-6 h-6 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-              )}
-            </button>
-
-            <button 
-              onClick={handleToggleMute}
-              disabled={status === AppStatus.PAUSED}
-              className={`relative w-24 h-24 md:w-32 md:h-32 rounded-full flex items-center justify-center transition-all duration-500 shadow-xl transform active:scale-95 border-4 md:border-8 border-white ring-8 ${
-                isMuted || status === AppStatus.PAUSED
-                ? 'bg-slate-200 text-slate-500 ring-slate-100' 
-                : 'bg-red-500 text-white ring-red-100'
-              }`}
-            >
-              {!isMuted && userVolume > 0.1 && status === AppStatus.CONNECTED && (
-                <div className="absolute -inset-4 border-2 border-red-200 rounded-full animate-ping opacity-30"></div>
-              )}
-              {isMuted || status === AppStatus.PAUSED ? (
-                <svg className="w-10 h-10 md:w-14 md:h-14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z M1 1l22 22" />
-                </svg>
-              ) : (
-                <svg className="w-10 h-10 md:w-14 md:h-14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              )}
-            </button>
-
-            <div className="w-14 h-14 md:w-20 md:h-20 flex items-center justify-center opacity-40">
-               <span className="text-2xl">{character.emoji}</span>
-            </div>
-          </div>
-
-          <p className={`text-[10px] md:text-sm font-black uppercase tracking-[0.2em] transition-colors duration-500 ${isMuted || status === AppStatus.PAUSED ? 'text-slate-400' : 'text-red-500'}`}>
-            {status === AppStatus.PAUSED ? 'Percakapan Berhenti' : isMuted ? 'Mikrofon Mati' : 'Mikrofon Aktif'}
-          </p>
+      <div className="w-full p-8 bg-white shadow-2xl rounded-t-[3rem] z-30">
+        <div className="max-w-xs mx-auto flex flex-col items-center gap-6">
+          <button 
+            onClick={() => { playToggleSound(!isMuted); setIsMuted(!isMuted); }}
+            className={`w-24 h-24 rounded-full flex items-center justify-center transition-all shadow-xl border-8 border-white ring-8 ${isMuted ? 'bg-slate-200 text-slate-500 ring-slate-100' : 'bg-red-500 text-white ring-red-100'}`}
+          >
+            {isMuted ? (
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z M1 1l22 22" /></svg>
+            ) : (
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+            )}
+          </button>
+          <p className={`font-black uppercase tracking-widest ${isMuted ? 'text-slate-400' : 'text-red-500'}`}>{isMuted ? 'Mati' : 'Mikrofon Aktif'}</p>
         </div>
       </div>
-
-      <div className="absolute top-20 left-4 opacity-[0.03] pointer-events-none text-6xl rotate-12">☁️</div>
-      <div className="absolute top-1/2 -right-6 opacity-[0.03] pointer-events-none text-7xl -rotate-12">🌈</div>
     </div>
   );
 };
 
 const App = () => {
   const [profile, setProfile] = useState<UserProfile | null>(null);
-
   return (
-    <HashRouter>
-      <div className="min-h-screen bg-[#f0f9ff]">
-        {!profile ? (
-          <SetupScreen onStart={setProfile} />
-        ) : (
-          <ChatScreen profile={profile} onBack={() => setProfile(null)} />
-        )}
-      </div>
-    </HashRouter>
+    <div className="min-h-screen bg-[#f0f9ff]">
+      {!profile ? <SetupScreen onStart={setProfile} /> : <ChatScreen profile={profile} onBack={() => setProfile(null)} />}
+    </div>
   );
 };
 

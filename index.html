@@ -32,13 +32,6 @@
         .glow-active {
             animation: pulse-glow 2s infinite;
         }
-        @keyframes pulse-slow {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.05); opacity: 0.95; }
-        }
-        .animate-pulse-slow {
-            animation: pulse-slow 3s ease-in-out infinite;
-        }
         @keyframes fadeInUp {
             from {
                 opacity: 0;
@@ -52,28 +45,20 @@
         .animate-fade-in-up {
             animation: fadeInUp 0.6s cubic-bezier(0.23, 1, 0.32, 1) forwards;
         }
-        .animation-delay-200 { animation-delay: 0.2s; }
-        .animation-delay-500 { animation-delay: 0.5s; }
-        
-        /* Prevent elastic scroll on iOS */
         html, body {
             height: 100%;
             overscroll-behavior-y: contain;
-        }
-
-        .status-transition {
-            transition: opacity 0.5s ease-in-out, transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
     </style>
 <script type="importmap">
 {
   "imports": {
+    "vite": "https://esm.sh/vite@^7.3.1",
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
     "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
     "react-router-dom": "https://esm.sh/react-router-dom@^7.12.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "vite": "https://esm.sh/vite@^7.3.1",
     "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
